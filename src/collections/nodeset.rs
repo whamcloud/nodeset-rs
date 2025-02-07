@@ -2,10 +2,12 @@ use super::parsers::Parser;
 use crate::idrange::CachedTranslation;
 use crate::idrange::IdRange;
 use crate::idrange::RangeStepError;
-use crate::Resolver;
 use crate::{IdSet, IdSetIter};
 use std::collections::BTreeMap;
 use std::fmt;
+
+#[cfg(feature = "groups")]
+use crate::Resolver;
 
 /// An unordered collection of nodes indexed in one or more dimensions.
 ///
@@ -370,8 +372,16 @@ where
     type Err = NodeSetParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let resolver = Resolver::get_global();
-        Parser::with_resolver(resolver, None).parse::<T>(s)
+        #[cfg(feature = "groups")]
+        {
+            let resolver = Resolver::get_global();
+            Parser::with_resolver(resolver, None).parse::<T>(s)
+        }
+
+        #[cfg(not(feature = "groups"))]
+        {
+            Parser::default().parse::<T>(s)
+        }
     }
 }
 

@@ -143,7 +143,13 @@ impl Resolver {
     ) -> Result<NodeSet<T>, NodeSetParseError> {
         let source = source.unwrap_or(self.default_source.as_str());
 
-        Parser::with_resolver(self, Some(source)).parse(
+        #[cfg(feature = "groups")]
+        let parser = Parser::with_resolver(self, Some(source));
+
+        #[cfg(not(feature = "groups"))]
+        let parser = Parser::default();
+
+        parser.parse(
             &self
                 .sources
                 .get(source)

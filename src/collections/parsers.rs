@@ -1,26 +1,32 @@
-use super::{config::Resolver, nodeset::NodeSetDimensions};
+use super::nodeset::NodeSetDimensions;
 use crate::{
     collections::{idset::IdRangeProduct, nodeset::IdSetKind},
-    idrange::{
-        AffixIdRangeStep, IdRange, IdRangeList, IdRangeOffset, IdRangeStep, RangeStepError,
-        SingleId,
-    },
+    idrange::{AffixIdRangeStep, IdRange, IdRangeOffset, IdRangeStep, RangeStepError, SingleId},
     IdSet, NodeSet, NodeSetParseError,
 };
-use auto_enums::auto_enum;
 use std::{convert::TryInto, fmt};
 use winnow::{
     self,
     ascii::{digit1, multispace0, multispace1},
-    combinator::{
-        alt, cut_err, delimited, eof, opt, peek, preceded, repeat, separated, separated_pair,
-        terminated,
-    },
+    combinator::{alt, cut_err, delimited, eof, opt, peek, preceded, repeat, separated},
     error::{
         ErrMode, FromExternalError, ModalResult as GenericModalResult, ParseError, ParserError,
     },
-    token::{literal, one_of, take_while},
+    token::{one_of, take_while},
     Parser as _,
+};
+
+#[cfg(feature = "groups")]
+use super::config::Resolver;
+#[cfg(feature = "groups")]
+use crate::idrange::IdRangeList;
+#[cfg(feature = "groups")]
+use auto_enums::auto_enum;
+#[cfg(feature = "groups")]
+use winnow::{
+    combinator::{preceded, separated_pair, terminated},
+    error::ErrMode,
+    token::literal,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -34,6 +40,7 @@ enum FormatError<'a> {
     MismatchedPadding(&'a str, &'a str),
 
     /// A reference was made to a group source that does not exist.
+    #[cfg(feature = "groups")]
     #[error("Unknown group source: '{0}'")]
     Source(&'a str),
 
@@ -61,11 +68,13 @@ impl<'a> From<FormatError<'a>> for NodeSetParseError {
             FormatError::MismatchedPadding(a, b) => {
                 NodeSetParseError::MismatchedPadding(a.to_string(), b.to_string())
             }
-            FormatError::Source(s) => NodeSetParseError::Source(s.to_string()),
             FormatError::RangeError(e) => NodeSetParseError::RangeError(e),
             FormatError::ParseIntError(e) => NodeSetParseError::ParseIntError(e),
             FormatError::OverFlow(e) => NodeSetParseError::OverFlow(e),
             FormatError::Command(e) => NodeSetParseError::Command(e),
+
+            #[cfg(feature = "groups")]
+            FormatError::Source(s) => NodeSetParseError::Source(s.to_string()),
         }
     }
 }
@@ -116,8 +125,14 @@ impl<'a, E: std::error::Error + Send + Sync + 'static + Into<FormatError<'a>>>
     }
 }
 
+#[cfg(feature = "groups")]
 fn is_nodeset_char(c: char) -> bool {
-    is_source_char(c) || c == ':'
+    is_source_char(c) || [':'].contains(&c)
+}
+
+#[cfg(not(feature = "groups"))]
+fn is_nodeset_char(c: char) -> bool {
+    is_source_char(c) || [':', '*', '@'].contains(&c)
 }
 
 fn is_source_char(c: char) -> bool {
@@ -127,16 +142,23 @@ fn is_source_char(c: char) -> bool {
 /// Parse strings into nodesets
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Parser<'a> {
+    #[cfg(feature = "groups")]
     resolver: Option<&'a Resolver>,
+    #[cfg(feature = "groups")]
     default_source: Option<&'a str>,
+
+    ghost: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> Parser<'a> {
     /// Create a new parser from a resolver
+    #[cfg(feature = "groups")]
     pub fn with_resolver(resolver: &'a Resolver, default_source: Option<&'a str>) -> Self {
         Self {
             resolver: Some(resolver),
             default_source,
+
+            ghost: std::marker::PhantomData,
         }
     }
 
@@ -207,7 +229,12 @@ impl<'a> Parser<'a> {
     {
         move |input: &mut &str| {
             alt((
-                alt((Self::rangeset, Self::nodeset, self.group())),
+                alt((
+                    Self::rangeset,
+                    Self::nodeset,
+                    #[cfg(feature = "groups")]
+                    self.group(),
+                )),
                 delimited("(", self.expr(), ")"),
             ))
             .parse_next(input)
@@ -223,6 +250,7 @@ impl<'a> Parser<'a> {
         .parse_next(i)
     }
 
+    #[cfg(feature = "groups")]
     fn nodeset_or_rangeset<T>(i: &mut &'a str) -> ModalResult<'a, NodeSet<T>>
     where
         T: IdRange + PartialEq + Clone + fmt::Display + fmt::Debug,
@@ -269,6 +297,7 @@ impl<'a> Parser<'a> {
         Self::set(false).parse_next(i)
     }
 
+    #[cfg(feature = "groups")]
     fn sourceset<T>(i: &mut &'a str) -> ModalResult<'a, NodeSet<T>>
     where
         T: IdRange + PartialEq + Clone + fmt::Display + fmt::Debug,
@@ -358,6 +387,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[cfg(feature = "groups")]
     #[auto_enum]
     fn group<T>(self) -> impl 'a + FnMut(&mut &'a str) -> ModalResult<'a, NodeSet<T>>
     where
@@ -416,6 +446,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[cfg(feature = "groups")]
     fn group_with_source<T>(
         self,
     ) -> impl 'a + FnMut(&mut &'a str) -> ModalResult<'a, (Option<NodeSet<T>>, Option<NodeSet<T>>)>
@@ -767,6 +798,7 @@ mod tests {
     //    assert!(parser(&mut "0ef").is_err());
     //}
 
+    #[cfg(feature = "groups")]
     #[test]
     fn test_group() {
         let mut resolver = Resolver::default();
